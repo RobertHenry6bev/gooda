@@ -33,7 +33,26 @@ limitations under the License.
 #include "arch.h"
 #include "triad_all.c"
 
-#define KIND "triad"
+typedef int (*triad_func)(int len, double xx, double *a, double *b, double *c);
+struct t_namelist {
+  const char *name;
+  triad_func func;
+};
+
+static struct t_namelist namelist[] = {
+  {"copy_vec", triad_copy_vec},
+  {"mem_cpy", triad_mem_cpy},
+  {"mem_set", triad_mem_set},
+  {"aligned", triad_aligned},
+  {"aligned_restrict", triad_aligned_restrict},
+  {"triad", triad},
+  {"ini", triad_ini},
+  {"restrict", triad_restrict},
+  {"vec", triad_vec},
+  {"writer10", triad_writer10},
+  {"writer00", triad_writer00},
+  {0, 0},
+};
 
 typedef unsigned long long uint64_t;
 #define DECLARE_ARGS(val, low, high) unsigned low, high
@@ -70,13 +89,13 @@ static int pin_cpu(pid_t pid, unsigned int cpu) {
 
 void usage() {
   fprintf(stderr,
-      "%s need at least 3 arguments setting values for -i, -r and -l\n", KIND);
+      "%s need at least 3 arguments setting values for -i, -r and -l\n", "driver");
   fprintf(stderr, " -i indicates what core to use when initializing buffers\n");
-  fprintf(stderr, " -r indicates what core to use when running the %s\n", KIND);
+  fprintf(stderr, " -r indicates what core to use when running the %s\n", "driver");
   fprintf(stderr, " -l value 0-3 determining the buffer size and thereby "
                   "setting the cache locality of the data\n");
   fprintf(stderr, " [-m] value increases the number of calls to %s by a "
-                  "multiplier = value\n", KIND);
+                  "multiplier = value\n", "driver");
   fprintf(stderr, " [-a] offset in bytes to use for base address of buffer a "
                   "(write target)\n");
   fprintf(stderr, " [-b] offset in bytes to use for base address of buffer b "
@@ -158,20 +177,32 @@ int main(int argc, char **argv) {
   size_t buf_size;
 
   const char *output_file_name = "gooda.out";
+  const char *test_name = "triad";
 
   if (argc < 3) {
     fprintf(stderr,
       "%s driver needs at least 3 arguments, cpu_init, cpu_run, "
        "cache_level, [call count multiplier  def = 1], [offset a, "
-       "offset_b, offset_c  defaults = 0] \n",
-       KIND);
+       "offset_b, offset_c  defaults = 0] \n", "driver");
     fprintf(stderr, " argc = %d\n", argc);
     usage();
     err(1, "bad arguments");
   }
 
+  triad_func test_function = NULL;
+  for (int i = 0; namelist[i].name; i++) {
+    if (strcmp(namelist[i].name, test_name) == 0) {
+      test_function = namelist[i].func;
+      break;
+    }
+  }
+  if (test_function == NULL) {
+    fprintf(stderr, "%s: Unknown triad function name\n", test_name);
+    exit(1);
+  }
+
   len = L4;
-  while ((c_val = getopt(argc, argv, "i:r:l:m:a:b:c:o:")) != -1) {
+  while ((c_val = getopt(argc, argv, "i:r:l:m:a:b:c:o:t:")) != -1) {
     switch (c_val) {
     case 'i':
       cpu = atoi(optarg);
@@ -197,8 +228,12 @@ int main(int argc, char **argv) {
     case 'o':
       output_file_name = savestr(optarg);
       break;
+    case 't':
+      test_name = savestr(optarg);
+      break;
     default:
       err(1, "unknown option %c", c_val);
+      return 1;
     }
   }
   iter = iter * mult;
@@ -207,7 +242,7 @@ int main(int argc, char **argv) {
   if (pin_cpu(pid, cpu) == -1) {
     err(1, "failed to set affinity");
   } else {
-    fprintf(stderr, "process pinned to core %5d for %s init\n", cpu, KIND);
+    fprintf(stderr, "process pinned to core %5d for %s init\n", cpu, test_name);
   }
 
   // set buffer sizes and loop tripcounts based on memory level
@@ -258,16 +293,16 @@ int main(int argc, char **argv) {
   if (pin_cpu(pid, cpu_run) == -1) {
     err(1, "failed to set affinity");
   } else {
-    fprintf(stderr, "process pinned to core %5d for %s run\n", cpu_run, KIND);
+    fprintf(stderr, "process pinned to core %5d for %s run\n", cpu_run, test_name);
   }
 
   // run the test
-  fprintf(stdout, "calling %s %5d times with len = %10zd\n", KIND, iter, len);
+  fprintf(stdout, "calling %s %5d times with len = %10zd\n", test_name, iter, len);
   ret_int = gettimeofday(&start_time, NULL);
   call_start = _rdtsc();
   for (i = 0; i < iter; i++) {
     start = _rdtsc();
-    bytes_per = triad(len, xx, a, b, c);
+    bytes_per = (test_function)(len, xx, a, b, c);
     stop = _rdtsc();
     run_time = stop - start;
     xx += 0.01;
