@@ -31,7 +31,7 @@ limitations under the License.
 #include <unistd.h>
 
 #include "arch.h"
-#include "triad.h"
+#include "triad_all.c"
 
 #define KIND "triad"
 
