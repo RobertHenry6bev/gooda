@@ -32,14 +32,14 @@ limitations under the License.
 
 #include "arch.h"
 #include "triad_all.c"
+#include "../matrix_mult/matrix_mult_all.c"
 
-typedef int (*triad_func)(int len, double xx, double *a, double *b, double *c);
-struct t_namelist {
+typedef size_t (*triad_func)(size_t len, double xx, double *a, double *b, double *c);
+struct triad_namelist_t {
   const char *name;
   triad_func func;
 };
-
-static struct t_namelist namelist[] = {
+static struct triad_namelist_t triad_namelist[] = {
   {"copy_vec", triad_copy_vec},
   {"mem_cpy", triad_mem_cpy},
   {"mem_set", triad_mem_set},
@@ -52,6 +52,20 @@ static struct t_namelist namelist[] = {
   {"writer10", triad_writer10},
   {"writer00", triad_writer00},
   {0, 0},
+};
+
+typedef size_t (*matrix_mult_func)(size_t len, double *restrict a, double *restrict b, double *restrict c);
+struct matrix_mult_namelist_t {
+  const char *name;
+  matrix_mult_func func;
+};
+static struct matrix_mult_namelist_t matrix_mult_namelist[] = {
+  {"matrix_mult_basic", matrix_mult_basic},
+  {"matrix_mult_inter", matrix_mult_inter},
+  {"matrix_mult_trans_by4", matrix_mult_trans_by4},
+  {"matrix_mult_trans", matrix_mult_trans},
+  {"matrix_mult_outer2by2", matrix_mult_outer2by2},
+  {0,0},
 };
 
 typedef unsigned long long uint64_t;
@@ -171,15 +185,24 @@ int main(int argc, char **argv) {
     err(1, "bad arguments");
   }
 
-  triad_func test_function = NULL;
-  for (int i = 0; namelist[i].name; i++) {
-    if (strcmp(namelist[i].name, test_name) == 0) {
-      test_function = namelist[i].func;
+  triad_func triad_test_function = NULL;
+  for (int i = 0; triad_namelist[i].name; i++) {
+    if (strcmp(triad_namelist[i].name, test_name) == 0) {
+      triad_test_function = triad_namelist[i].func;
       break;
     }
   }
-  if (test_function == NULL) {
-    fprintf(stderr, "%s: Unknown triad function name\n", test_name);
+
+  matrix_mult_func matrix_mult_test_function = NULL;
+  for (int i = 0; matrix_mult_namelist[i].name; i++) {
+    if (strcmp(matrix_mult_namelist[i].name, test_name) == 0) {
+      matrix_mult_test_function = matrix_mult_namelist[i].func;
+      break;
+    }
+  }
+
+  if (triad_test_function == NULL && matrix_mult_test_function == NULL) {
+    fprintf(stderr, "%s: Unknown test function name\n", test_name);
     exit(1);
   }
 
@@ -295,7 +318,9 @@ int main(int argc, char **argv) {
   double xx = 0.01;  // loop carried
   for (i = 0; i < iter; i++) {
     size_t start = _rdtsc();
-    size_t bytes_per = (test_function)(len, xx, a, b, c);
+    size_t bytes_per = triad_test_function 
+      ? (triad_test_function)(len, xx, a, b, c)
+      : (matrix_mult_test_function)(len, a, b, c);
     size_t stop = _rdtsc();
     run_time = stop - start;
     xx += 0.01;

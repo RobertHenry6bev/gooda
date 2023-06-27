@@ -1,0 +1,9 @@
+*.o
+copy_vec_avx
+triad
+triad_inl
+triad_vec
+writer_0
+writer_10
+writer_10_skip
+
