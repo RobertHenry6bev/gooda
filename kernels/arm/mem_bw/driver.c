@@ -55,9 +55,27 @@ static struct t_namelist namelist[] = {
 };
 
 typedef unsigned long long uint64_t;
+
+#if defined(__x86_64__) // {
+
+#define DECLARE_ARGS(val, low, high)    unsigned low, high
+#define EAX_EDX_VAL(val, low, high)     ((low) | ((uint64_t)(high) << 32))
+#define EAX_EDX_ARGS(val, low, high)    "a" (low), "d" (high)
+#define EAX_EDX_RET(val, low, high)     "=a" (low), "=d" (high)
+static inline unsigned long long _rdtsc(void)
+{
+  DECLARE_ARGS(val, low, high);
+  asm volatile("rdtsc" : EAX_EDX_RET(val, low, high));
+  return EAX_EDX_VAL(val, low, high);
+}
+static inline uint64_t _loc_freq(void) {
+  return 0; // TBD
+}
+#endif // }
+
+#if defined(__arch64__) // {
 #define DECLARE_ARGS(val, low, high) unsigned low, high
 #define isb() asm volatile("isb" : : : "memory")
-
 static inline uint64_t _rdtsc(void) {
   uint64_t cval;
   isb();
@@ -71,6 +89,7 @@ static inline uint64_t _loc_freq(void) {
   asm volatile("mrs %0, cntfrq_el0" : "=r"(cval));
   return cval;
 }
+#endif // }
 
 #define MAX_CPUS 2048
 #define NR_CPU_BITS (MAX_CPUS >> 3)
@@ -115,7 +134,6 @@ int main(int argc, char **argv) {
   int mem_level;
   int cpu;
   int cpu_run;
-  int bytes_per;
   int scale;
 
   int offset_a = 0;
@@ -123,26 +141,11 @@ int main(int argc, char **argv) {
   int offset_c = 0;
   int mult = 1;
   int iter = 5;  // TODO: originally 100
-  int c_val;
 
-  double *a;
-  double *b;
-  double *c;
-
-  double xx = 0.01;
-
-  double bw;
-  double avg_bw;
-  double best_bw = -1.0;
-
-  char *buf1;
-  char *buf2;
-  char *buf3;
   int i;
   int j;
   int k;
 
-  size_t len;
   size_t level_size[4];
 
   __pid_t pid = 0;
@@ -150,29 +153,8 @@ int main(int argc, char **argv) {
   int cpu_setsize;
   cpu_set_t mask;
 
-  size_t start;
-  size_t stop;
-  size_t run_time;
-  size_t call_start;
-  size_t call_stop;
-  size_t call_run_time;
-  size_t total_bytes = 0;
-
-  size_t sum_run_time = 0;
-  size_t run_time_k = 0;
-  size_t init_start;
-  size_t init_end;
-  size_t init_run;
-
-  struct timespec start_t;
-  struct timespec stop_t;
-  struct timeval start_time;
-  struct timeval stop_time;
-
   size_t total = 0;
   int ret_int, fd = -1;
-  size_t gotten_time;
-  size_t freq_val;
   off_t offset = 0;
   size_t buf_size;
 
@@ -201,7 +183,8 @@ int main(int argc, char **argv) {
     exit(1);
   }
 
-  len = L4;
+  size_t len = L4;
+  int c_val = 0;
   while ((c_val = getopt(argc, argv, "i:r:l:m:a:b:c:o:t:")) != -1) {
     switch (c_val) {
     case 'i':
@@ -269,22 +252,25 @@ int main(int argc, char **argv) {
     "len = %10zd, mem_level = %1d, iter = %5d, mult = %5d\n",
     len, mem_level, iter, mult);
 
-  buf_size = sizeof(double) * len;
-  buf1 = (char *)mmap(NULL, buf_size, PROT_READ | PROT_WRITE,
-                      MAP_PRIVATE | MAP_ANON, fd, offset);
-  buf2 = (char *)mmap(NULL, buf_size, PROT_READ | PROT_WRITE,
-                      MAP_PRIVATE | MAP_ANON, fd, offset);
-  buf3 = (char *)mmap(NULL, buf_size, PROT_READ | PROT_WRITE,
-                      MAP_PRIVATE | MAP_ANON, fd, offset);
-
-  a = (double *)buf1;
-  b = (double *)buf2;
-  c = (double *)buf3;
-
-  for (i = 0; i < len; i++) {
-    a[i] = 0.0;
-    b[i] = 10.0;
-    c[i] = 10.0;
+  double *a;
+  double *b;
+  double *c;
+  {
+    buf_size = sizeof(double) * len;
+    char *buf1 = (char *)mmap(NULL, buf_size, PROT_READ | PROT_WRITE,
+                        MAP_PRIVATE | MAP_ANON, fd, offset);
+    char *buf2 = (char *)mmap(NULL, buf_size, PROT_READ | PROT_WRITE,
+                        MAP_PRIVATE | MAP_ANON, fd, offset);
+    char *buf3 = (char *)mmap(NULL, buf_size, PROT_READ | PROT_WRITE,
+                        MAP_PRIVATE | MAP_ANON, fd, offset);
+    a = (double *)buf1;
+    b = (double *)buf2;
+    c = (double *)buf3;
+    for (int i = 0; i < len; i++) {
+      a[i] = 0.0;
+      b[i] = 10.0;
+      c[i] = 10.0;
+    }
   }
 
   //
@@ -298,28 +284,39 @@ int main(int argc, char **argv) {
 
   // run the test
   fprintf(stdout, "calling %s %5d times with len = %10zd\n", test_name, iter, len);
+  struct timeval start_time;
   ret_int = gettimeofday(&start_time, NULL);
-  call_start = _rdtsc();
+
+  size_t total_bytes = 0;
+
+  size_t call_start = _rdtsc();
+  size_t run_time = 0;  // TODO: value escapes
+  double best_bw = -1.0;  // loop carried
+  double xx = 0.01;  // loop carried
   for (i = 0; i < iter; i++) {
-    start = _rdtsc();
-    bytes_per = (test_function)(len, xx, a, b, c);
-    stop = _rdtsc();
+    size_t start = _rdtsc();
+    size_t bytes_per = (test_function)(len, xx, a, b, c);
+    size_t stop = _rdtsc();
     run_time = stop - start;
     xx += 0.01;
     total_bytes += len * bytes_per;
-    bw = (double)(len * bytes_per) / (double)run_time;
+    double bw = (double)(len * bytes_per) / (double)run_time;
     if (bw > best_bw) {
       best_bw = bw;
     }
   }
-  call_stop = _rdtsc();
-  freq_val = _loc_freq();
+
+  size_t call_stop =  _rdtsc();
+  size_t freq_val = _loc_freq();
+  struct timeval stop_time;
   ret_int = gettimeofday(&stop_time, NULL);
-  gotten_time = (size_t)(stop_time.tv_sec - start_time.tv_sec) * 1000000;
+
+  size_t gotten_time = 0;
+  gotten_time += (size_t)(stop_time.tv_sec - start_time.tv_sec) * 1000000;
   gotten_time += (size_t)(stop_time.tv_usec - start_time.tv_usec);
 
-  call_run_time = call_stop - call_start;
-  avg_bw = (double)(total_bytes) / (double)call_run_time;
+  size_t call_run_time = call_stop - call_start;
+  double avg_bw = (double)(total_bytes) / (double)call_run_time;
 
   FILE *output_file = NULL;
   if (output_file_name[0] != '-') {
@@ -331,6 +328,7 @@ int main(int argc, char **argv) {
     fprintf(stderr, "%s: file open problems\n", output_file_name);
   }
 
+  // TODO: run_time escapes the iteration loop
   fprintf(output_file,
     "transfering %10zd bytes from memory level %d took %zd cycles/call and "
      "a total of %10zd\n",
