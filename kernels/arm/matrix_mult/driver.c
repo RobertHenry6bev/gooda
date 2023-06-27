@@ -150,7 +150,7 @@ main(int argc, char ** argv)
 
 // set buffer sizes and loop tripcounts based on memory level
 	buf_size = (len+8)*(len+8)*8;
-	fprintf(stderr, "len = %d, buf_szie = %zd, iter = %d, mult = %d\n",len, buf_size, iter,mult);
+	fprintf(stderr, "len = %d, buf_size = %zd, iter = %d, mult = %d\n",len, buf_size, iter,mult);
 
 // malloc and initialize buffers
 	buf1 = (char*) mmap(NULL,buf_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON , fd, offset);

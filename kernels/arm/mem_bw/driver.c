@@ -20,13 +20,14 @@ limitations under the License.
 #include <getopt.h>
 #include <malloc.h>
 #include <sched.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <syscall.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/time.h>
-#include <syscall.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -170,7 +171,6 @@ int main(int argc, char **argv) {
   size_t total = 0;
   int ret_int, fd = -1;
   off_t offset = 0;
-  size_t buf_size;
 
   const char *output_file_name = "gooda.out";
   const char *test_name = "triad";
@@ -206,7 +206,9 @@ int main(int argc, char **argv) {
     exit(1);
   }
 
-  size_t len = L4;
+  bool is_mem_bw = (triad_test_function != NULL);
+
+  size_t len = is_mem_bw ? L4 : 2048;  // WFT? TODO
   int c_val = 0;
   while ((c_val = getopt(argc, argv, "i:r:l:m:a:b:c:o:t:")) != -1) {
     switch (c_val) {
@@ -279,7 +281,9 @@ int main(int argc, char **argv) {
   double *b;
   double *c;
   {
-    buf_size = sizeof(double) * len;
+    size_t buf_size = is_mem_bw
+      ? sizeof(double) * len
+      : ((len + sizeof (double)) * (len + sizeof(double)) * sizeof(double));
     char *buf1 = (char *)mmap(NULL, buf_size, PROT_READ | PROT_WRITE,
                         MAP_PRIVATE | MAP_ANON, fd, offset);
     char *buf2 = (char *)mmap(NULL, buf_size, PROT_READ | PROT_WRITE,
@@ -289,10 +293,20 @@ int main(int argc, char **argv) {
     a = (double *)buf1;
     b = (double *)buf2;
     c = (double *)buf3;
-    for (int i = 0; i < len; i++) {
-      a[i] = 0.0;
-      b[i] = 10.0;
-      c[i] = 10.0;
+    if (is_mem_bw) {
+      for (int i = 0; i < len; i++) {
+        a[i] = 0.0;
+        b[i] = 10.0;
+        c[i] = 10.0;
+      }
+    } else {
+       for(i=0;i<len;i++) {
+          for(k=0; k<len;k++) {
+            a[i*len+k] = 0.0;
+            b[i*len+k] = 1.1;
+            c[i*len+k] = 1.1;
+          }
+        }
     }
   }
 
