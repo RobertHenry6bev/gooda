@@ -88,7 +88,7 @@ static inline uint64_t _loc_freq(void) {
 }
 #endif // }
 
-#if defined(__arch64__) // {
+#if defined(__aarch64__)
 #define DECLARE_ARGS(val, low, high) unsigned low, high
 #define isb() asm volatile("isb" : : : "memory")
 static inline uint64_t _rdtsc(void) {
