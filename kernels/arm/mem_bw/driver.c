@@ -18,6 +18,7 @@ limitations under the License.
 #include <err.h>
 #include <fcntl.h>
 #include <getopt.h>
+#include <inttypes.h>
 #include <malloc.h>
 #include <sched.h>
 #include <stdbool.h>
@@ -34,6 +35,8 @@ limitations under the License.
 #include "arch.h"
 #include "triad_all.c"
 #include "../matrix_mult/matrix_mult_all.c"
+
+#include "librdtsc/rdtsc.h"
 
 typedef size_t (*triad_func)(size_t len, double xx, double *a, double *b, double *c);
 struct triad_namelist_t {
@@ -69,21 +72,19 @@ static struct matrix_mult_namelist_t matrix_mult_namelist[] = {
   {0,0},
 };
 
-typedef unsigned long long uint64_t;
-
 #if defined(__x86_64__) // {
 
 #define DECLARE_ARGS(val, low, high)    unsigned low, high
 #define EAX_EDX_VAL(val, low, high)     ((low) | ((uint64_t)(high) << 32))
 #define EAX_EDX_ARGS(val, low, high)    "a" (low), "d" (high)
 #define EAX_EDX_RET(val, low, high)     "=a" (low), "=d" (high)
-static inline unsigned long long _rdtsc(void)
+static inline uint64_t _original_rdtsc(void)
 {
   DECLARE_ARGS(val, low, high);
   asm volatile("rdtsc" : EAX_EDX_RET(val, low, high));
   return EAX_EDX_VAL(val, low, high);
 }
-static inline uint64_t _loc_freq(void) {
+static inline uint64_t _original_loc_freq(void) {
   return 0; // TBD
 }
 #endif // }
@@ -91,14 +92,14 @@ static inline uint64_t _loc_freq(void) {
 #if defined(__aarch64__)
 #define DECLARE_ARGS(val, low, high) unsigned low, high
 #define isb() asm volatile("isb" : : : "memory")
-static inline uint64_t _rdtsc(void) {
+static inline uint64_t _original_rdtsc(void) {
   uint64_t cval;
   isb();
   asm volatile("mrs %0, cntvct_el0" : "=r"(cval));
   return cval;
 }
 
-static inline uint64_t _loc_freq(void) {
+static inline uint64_t _original_loc_freq(void) {
   uint64_t cval;
   isb();
   asm volatile("mrs %0, cntfrq_el0" : "=r"(cval));
@@ -108,6 +109,7 @@ static inline uint64_t _loc_freq(void) {
 
 #define MAX_CPUS 2048
 #define NR_CPU_BITS (MAX_CPUS >> 3)
+
 static int pin_cpu(pid_t pid, unsigned int cpu) {
   unsigned long long my_mask[NR_CPU_BITS];
 
@@ -146,10 +148,23 @@ const char *savestr(const char *str) {
 }
 
 int main(int argc, char **argv) {
-  int mem_level;
-  int cpu;
-  int cpu_run;
-  int scale;
+  {
+    int res = rdtsc_init();
+    if (res != 0) {
+        fprintf(stderr, "rdtsc_init: ERROR DURING INITIALIZATION!!!\n");
+        exit(res);
+    }
+    // uint64_t tsc_hz = rdtsc_get_tsc_hz();
+    // fprintf(stdout, "tsc_MHz = %5.2e\n", tsc_hz / 1.0e6);
+  }
+  uint64_t freq_val = rdtsc_get_tsc_hz();
+  uint64_t assumed_clock_freq = (uint64_t)(2.8e9);
+  double freq_scale = (double)(assumed_clock_freq) / (double)(freq_val);
+
+  int mem_level = -1;
+  int cpu = -1;
+  int cpu_run = -1;
+  int scale = -1;
 
   int offset_a = 0;
   int offset_b = 0;
@@ -158,15 +173,11 @@ int main(int argc, char **argv) {
   int iter = 5;  // TODO: originally 100
 
   int i;
-  int j;
   int k;
 
   size_t level_size[4];
 
   __pid_t pid = 0;
-
-  int cpu_setsize;
-  cpu_set_t mask;
 
   size_t total = 0;
   int ret_int, fd = -1;
@@ -311,8 +322,8 @@ int main(int argc, char **argv) {
         c[i] = 10.0;
       }
     } else {
-       for(i=0;i<len;i++) {
-          for(k=0; k<len;k++) {
+       for(i=0; i<len; i++) {
+          for(k=0; k<len; k++) {
             a[i*len+k] = 0.0;
             b[i*len+k] = 1.1;
             c[i*len+k] = 1.1;
@@ -337,27 +348,29 @@ int main(int argc, char **argv) {
 
   size_t total_bytes = 0;
 
-  size_t call_start = _rdtsc();
-  size_t run_time = 0;  // TODO: value escapes
+  size_t call_start = rdtsc();
   double best_bw = -1.0;  // loop carried
   double xx = 0.01;  // loop carried
   for (i = 0; i < iter; i++) {
-    size_t start = _rdtsc();
+    size_t start = rdtsc();
     size_t bytes_per = triad_test_function 
       ? (triad_test_function)(len, xx, a, b, c)
       : (matrix_mult_test_function)(len, a, b, c);
-    size_t stop = _rdtsc();
-    run_time = stop - start;
+    size_t stop = rdtsc();
     xx += 0.01;
+    //
+    double run_time = (double)(stop - start) * freq_scale;
     total_bytes += len * bytes_per;
-    double bw = (double)(len * bytes_per) / (double)run_time;
+    double bw = (double)(len * bytes_per) / run_time;
+    if (false) {
+      fprintf(stdout, "i=%8d bw=%8.3f bytes/cycle\n", i, bw);
+    }
     if (bw > best_bw) {
       best_bw = bw;
     }
   }
+  size_t call_stop = rdtsc();
 
-  size_t call_stop =  _rdtsc();
-  size_t freq_val = _loc_freq();
   struct timeval stop_time;
   ret_int = gettimeofday(&stop_time, NULL);
 
@@ -365,7 +378,7 @@ int main(int argc, char **argv) {
   gotten_time += (size_t)(stop_time.tv_sec - start_time.tv_sec) * 1000000;
   gotten_time += (size_t)(stop_time.tv_usec - start_time.tv_usec);
 
-  size_t call_run_time = call_stop - call_start;
+  double call_run_time = (double)(call_stop - call_start) * freq_scale;
   double avg_bw = (double)(total_bytes) / (double)call_run_time;
 
   FILE *output_file = NULL;
@@ -378,14 +391,13 @@ int main(int argc, char **argv) {
     fprintf(stderr, "%s: file open problems\n", output_file_name);
   }
 
-  // TODO: run_time escapes the iteration loop
   fprintf(output_file,
-    "transfering %10zd bytes from memory level %d took %zd cycles/call and "
-     "a total of %10zd\n",
-     total_bytes, mem_level, run_time, call_run_time);
-  fprintf(output_file, "run time = %10zd\n", call_run_time);
+    "transfering %10zd bytes from memory level %d took a total of %10g cycles\n",
+     total_bytes, mem_level, call_run_time);
+  fprintf(output_file, "run time = %10g cycles\n", call_run_time);
   fprintf(output_file, "gettimeofday_run time = %10zd\n", gotten_time);
-  fprintf(output_file, "frequency = %10zd\n", freq_val);
+  fprintf(output_file, "frequency real_time_clock = %10zd\n", freq_val);
+  fprintf(output_file, "frequency core assumed = %10zd\n", assumed_clock_freq);
   fprintf(output_file, "average bytes/cycle = %f\n", avg_bw);
   fprintf(output_file, "best bytes/cycle = %f\n", best_bw);
 
