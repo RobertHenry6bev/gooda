@@ -139,10 +139,10 @@ void usage() {
 }
 
 const char *savestr(const char *str) {
-    size_t len = strlen(str);
-    char *xnew = (char *)calloc(len+1, sizeof(char));
-    strcpy(xnew, str);
-    return xnew;
+  size_t len = strlen(str);
+  char *xnew = (char *)calloc(len+1, sizeof(char));
+  strcpy(xnew, str);
+  return xnew;
 }
 
 int main(int argc, char **argv) {
@@ -173,7 +173,7 @@ int main(int argc, char **argv) {
   off_t offset = 0;
 
   const char *output_file_name = "gooda.out";
-  const char *test_name = "triad";
+  const char *test_name = NULL;
 
   if (argc < 3) {
     fprintf(stderr,
@@ -185,30 +185,8 @@ int main(int argc, char **argv) {
     err(1, "bad arguments");
   }
 
-  triad_func triad_test_function = NULL;
-  for (int i = 0; triad_namelist[i].name; i++) {
-    if (strcmp(triad_namelist[i].name, test_name) == 0) {
-      triad_test_function = triad_namelist[i].func;
-      break;
-    }
-  }
+  size_t len = 0;
 
-  matrix_mult_func matrix_mult_test_function = NULL;
-  for (int i = 0; matrix_mult_namelist[i].name; i++) {
-    if (strcmp(matrix_mult_namelist[i].name, test_name) == 0) {
-      matrix_mult_test_function = matrix_mult_namelist[i].func;
-      break;
-    }
-  }
-
-  if (triad_test_function == NULL && matrix_mult_test_function == NULL) {
-    fprintf(stderr, "%s: Unknown test function name\n", test_name);
-    exit(1);
-  }
-
-  bool is_mem_bw = (triad_test_function != NULL);
-
-  size_t len = is_mem_bw ? L4 : 2048;  // WFT? TODO
   int c_val = 0;
   while ((c_val = getopt(argc, argv, "i:r:l:m:a:b:c:o:t:")) != -1) {
     switch (c_val) {
@@ -244,9 +222,42 @@ int main(int argc, char **argv) {
       return 1;
     }
   }
+
+  triad_func triad_test_function = NULL;
+  matrix_mult_func matrix_mult_test_function = NULL;
+  bool is_mem_bw = false;
+  {
+    if (test_name == NULL) {
+      fprintf(stderr, "You must specify a test_name using the -t flag\n");
+      exit(1);
+    }
+    for (int i = 0; triad_namelist[i].name; i++) {
+      if (strcmp(triad_namelist[i].name, test_name) == 0) {
+        triad_test_function = triad_namelist[i].func;
+        break;
+      }
+    }
+    for (int i = 0; matrix_mult_namelist[i].name; i++) {
+      if (strcmp(matrix_mult_namelist[i].name, test_name) == 0) {
+        matrix_mult_test_function = matrix_mult_namelist[i].func;
+        break;
+      }
+    }
+    if (triad_test_function == NULL && matrix_mult_test_function == NULL) {
+      fprintf(stderr, "%s: Unknown test function name\n", test_name);
+      exit(1);
+    }
+    is_mem_bw = (triad_test_function != NULL);
+  }
+
+  if (len == 0) {
+    len = is_mem_bw ? L4 : 2048;  // WTF? TODO
+  }
   iter = iter * mult;
 
+  //
   // pin core affinity for initialization
+  //
   if (pin_cpu(pid, cpu) == -1) {
     err(1, "failed to set affinity");
   } else {
