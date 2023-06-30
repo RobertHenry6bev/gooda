@@ -47,14 +47,15 @@ static struct triad_namelist_t triad_namelist[] = {
   {"copy_vec", triad_copy_vec},
   {"mem_cpy", triad_mem_cpy},
   {"mem_set", triad_mem_set},
-  {"aligned", triad_aligned},
-  {"aligned_restrict", triad_aligned_restrict},
-  {"triad", triad},
-  {"ini", triad_ini},
-  {"restrict", triad_restrict},
-  {"vec", triad_vec},
   {"writer10", triad_writer10},
   {"writer00", triad_writer00},
+
+  {"triad", triad},
+  {"triad_aligned", triad_aligned},
+  {"triad_aligned_restrict", triad_aligned_restrict},
+  {"triad_ini", triad_ini},
+  {"triad_restrict", triad_restrict},
+  {"triad_vec", triad_vec},
   {0, 0},
 };
 
