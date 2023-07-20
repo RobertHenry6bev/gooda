@@ -165,7 +165,6 @@ int main(int argc, char **argv) {
   int mem_level = -1;
   int cpu = -1;
   int cpu_run = -1;
-  int scale = -1;
 
   int offset_a = 0;
   int offset_b = 0;
@@ -175,8 +174,6 @@ int main(int argc, char **argv) {
 
   int i;
   int k;
-
-  size_t level_size[4];
 
   __pid_t pid = 0;
 
@@ -190,14 +187,14 @@ int main(int argc, char **argv) {
   if (argc < 3) {
     fprintf(stderr,
       "%s driver needs at least 3 arguments, cpu_init, cpu_run, "
-       "cache_level, [call count multiplier  def = 1], [offset a, "
+       "cache_level, [call count multiplier  def = 1], [offset_a, "
        "offset_b, offset_c  defaults = 0] \n", "driver");
     fprintf(stderr, " argc = %d\n", argc);
     usage();
     err(1, "bad arguments");
   }
 
-  size_t len = 0;
+  size_t len1 = 0;
 
   int c_val = 0;
   while ((c_val = getopt(argc, argv, "i:r:l:m:a:b:c:o:t:")) != -1) {
@@ -262,8 +259,8 @@ int main(int argc, char **argv) {
     is_mem_bw = (triad_test_function != NULL);
   }
 
-  if (len == 0) {
-    len = is_mem_bw ? L4 : 2048;  // WTF? TODO
+  if (len1 == 0) {
+    len1 = is_mem_bw ? L4 : 2048;  // WTF? TODO
   }
   iter = iter * mult;
 
@@ -276,33 +273,38 @@ int main(int argc, char **argv) {
     fprintf(stderr, "process pinned to core %5d for %s init\n", cpu, test_name);
   }
 
+  //
   // set buffer sizes and loop tripcounts based on memory level
-  level_size[0] = L1;
-  level_size[1] = L2;
-  level_size[2] = L3;
-  level_size[3] = L4;
+  //
+  const size_t level_size[] = {
+    L1,  // from arch.h
+    L2,  // from arch.h
+    L3,  // from arch.h
+    L4,  // from arch.h
+  };
+
+  if (mem_level < 0 || mem_level >= sizeof(level_size)/sizeof(level_size[0])) {
+    fprintf(stderr, "mem_level %d via -l flag is out of range\n", (int)mem_level);
+    return -1;
+  }
   fprintf(stderr,
-    "len = %10zd, mem_level = %1d, iter = %5d, mult = %5d\n",
+    "len L4 = %10zd, mem_level = %1d, iter = %5d, mult = %5d\n",
+    len1, mem_level, iter, mult);
+
+  size_t len = level_size[mem_level] / sizeof(double);
+  fprintf(stderr,
+    "len Lx = %10zd, mem_level = %1d, iter = %5d, mult = %5d\n",
     len, mem_level, iter, mult);
 
-  len = level_size[mem_level] / (size_t)8;
-  fprintf(stderr,
-    "len = %10zd, mem_level = %1d, iter = %5d, mult = %5d\n",
-    len, mem_level, iter, mult);
-
-  scale = level_size[3] / ((size_t)8 * len);
-  fprintf(stderr,
-    "len = %10zd, mem_level = %1d, iter = %5d, mult = %5d, scale = %7d\n",
-    len, mem_level, iter, mult, scale);
-
+  size_t scale = level_size[3] / (sizeof(double) * len);
   iter = iter * scale * mult;
   fprintf(stderr,
-    "len = %10zd, mem_level = %1d, iter = %5d, mult = %5d\n",
-    len, mem_level, iter, mult);
+    "len Ls = %10zd, mem_level = %1d, iter = %5d, mult = %5d, scale = %7d\n",
+    len, mem_level, iter, mult, scale);
 
-  double *a;
-  double *b;
-  double *c;
+  double *a = NULL;
+  double *b = NULL;
+  double *c = NULL;
   {
     size_t buf_size = is_mem_bw
       ? sizeof(double) * len
@@ -318,7 +320,7 @@ int main(int argc, char **argv) {
     c = (double *)buf3;
     if (is_mem_bw) {
       for (int i = 0; i < len; i++) {
-        a[i] = 0.0;
+        a[i] = 00.0;
         b[i] = 10.0;
         c[i] = 10.0;
       }
@@ -342,7 +344,9 @@ int main(int argc, char **argv) {
     fprintf(stderr, "process pinned to core %5d for %s run\n", cpu_run, test_name);
   }
 
+  //
   // run the test
+  //
   fprintf(stdout, "calling %s %5d times with len = %10zd\n", test_name, iter, len);
   struct timeval start_time;
   ret_int = gettimeofday(&start_time, NULL);
