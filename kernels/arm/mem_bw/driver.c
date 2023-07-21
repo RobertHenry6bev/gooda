@@ -38,7 +38,7 @@ limitations under the License.
 
 #include "librdtsc/rdtsc.h"
 
-typedef size_t (*triad_func)(size_t len, double xx, double *a, double *b, double *c);
+typedef size_t (*triad_func)(size_t items_per_array, double xx, double *a, double *b, double *c);
 struct triad_namelist_t {
   const char *name;
   triad_func func;
@@ -59,7 +59,7 @@ static struct triad_namelist_t triad_namelist[] = {
   {0, 0},
 };
 
-typedef size_t (*matrix_mult_func)(size_t len, double *restrict a, double *restrict b, double *restrict c);
+typedef size_t (*matrix_mult_func)(size_t items_per_array, double *restrict a, double *restrict b, double *restrict c);
 struct matrix_mult_namelist_t {
   const char *name;
   matrix_mult_func func;
@@ -147,6 +147,12 @@ const char *savestr(const char *str) {
   strcpy(xnew, str);
   return xnew;
 }
+static size_t round_up(size_t val, size_t rounder) {
+  return ((val + rounder - 1) /rounder) * rounder;
+}
+static size_t round_down(size_t val, size_t rounder) {
+  return ((val) /rounder) * rounder;
+}
 
 int main(int argc, char **argv) {
   {
@@ -169,8 +175,9 @@ int main(int argc, char **argv) {
   int offset_a = 0;
   int offset_b = 0;
   int offset_c = 0;
-  int mult = 1;
-  int iter = 5;  // TODO: originally 100
+
+  double mult = 1.0;
+  int iter = 100;
 
   int i;
   int k;
@@ -194,11 +201,12 @@ int main(int argc, char **argv) {
     err(1, "bad arguments");
   }
 
-  size_t len1 = 0;
-
   int c_val = 0;
-  while ((c_val = getopt(argc, argv, "i:r:l:m:a:b:c:o:t:")) != -1) {
+  while ((c_val = getopt(argc, argv, "i:r:l:m:a:b:c:o:t:n:")) != -1) {
     switch (c_val) {
+    case 'n':
+      iter = atoi(optarg);
+      break;
     case 'i':
       cpu = atoi(optarg);
       break;
@@ -209,7 +217,7 @@ int main(int argc, char **argv) {
       mem_level = atoi(optarg);
       break;
     case 'm':
-      mult = atoi(optarg);
+      mult = atof(optarg);
       break;
     case 'a':
       offset_a = atoi(optarg);
@@ -234,7 +242,10 @@ int main(int argc, char **argv) {
 
   triad_func triad_test_function = NULL;
   matrix_mult_func matrix_mult_test_function = NULL;
+
+
   bool is_mem_bw = false;
+  size_t bytes_per_iteration = 0;
   {
     if (test_name == NULL) {
       fprintf(stderr, "You must specify a test_name using the -t flag\n");
@@ -243,12 +254,17 @@ int main(int argc, char **argv) {
     for (int i = 0; triad_namelist[i].name; i++) {
       if (strcmp(triad_namelist[i].name, test_name) == 0) {
         triad_test_function = triad_namelist[i].func;
+        double xx = 0.0;
+        double a[64], b[64], c[64];
+        bytes_per_iteration = triad_test_function(0, xx, a, b, c);
         break;
       }
     }
     for (int i = 0; matrix_mult_namelist[i].name; i++) {
       if (strcmp(matrix_mult_namelist[i].name, test_name) == 0) {
         matrix_mult_test_function = matrix_mult_namelist[i].func;
+        double a[64], b[64], c[64];
+        bytes_per_iteration = matrix_mult_test_function(0, a, b, c);
         break;
       }
     }
@@ -259,24 +275,11 @@ int main(int argc, char **argv) {
     is_mem_bw = (triad_test_function != NULL);
   }
 
-  if (len1 == 0) {
-    len1 = is_mem_bw ? L4 : 2048;  // WTF? TODO
-  }
-  iter = iter * mult;
-
-  //
-  // pin core affinity for initialization
-  //
-  if (pin_cpu(pid, cpu) == -1) {
-    err(1, "failed to set affinity");
-  } else {
-    fprintf(stderr, "process pinned to core %5d for %s init\n", cpu, test_name);
-  }
-
   //
   // set buffer sizes and loop tripcounts based on memory level
   //
   const size_t level_size[] = {
+    0,   // L0 size  (not implemented)
     L1,  // from arch.h
     L2,  // from arch.h
     L3,  // from arch.h
@@ -287,49 +290,64 @@ int main(int argc, char **argv) {
     fprintf(stderr, "mem_level %d via -l flag is out of range\n", (int)mem_level);
     return -1;
   }
-  fprintf(stderr,
-    "len L4 = %10zd, mem_level = %1d, iter = %5d, mult = %5d\n",
-    len1, mem_level, iter, mult);
 
-  size_t len = level_size[mem_level] / sizeof(double);
-  fprintf(stderr,
-    "len Lx = %10zd, mem_level = %1d, iter = %5d, mult = %5d\n",
-    len, mem_level, iter, mult);
+  size_t cache_size = level_size[mem_level];
+  if (cache_size == 0) {
+    fprintf(stderr, "mem_level %d unknown\n", (int)mem_level);
+    return -1;
+  }
+  int nvects_used  = bytes_per_iteration / sizeof(double);
 
-  size_t scale = level_size[3] / (sizeof(double) * len);
-  iter = iter * scale * mult;
-  fprintf(stderr,
-    "len Ls = %10zd, mem_level = %1d, iter = %5d, mult = %5d, scale = %7d\n",
-    len, mem_level, iter, mult, scale);
+  size_t round_by = 64;
+  size_t bytes_per_array = 0;
+
+  bytes_per_array = cache_size / nvects_used;
+  bytes_per_array = (size_t)(mult * (double)bytes_per_array);
+  bytes_per_array = round_down(bytes_per_array, round_by);
+
+  size_t items_per_array = bytes_per_array / sizeof(double);
+
+  printf("cache_size=%d\n", (int)(cache_size));
+  printf("nvects_used=%d\n", (int)(nvects_used));
+  printf("mult=%g\n", mult);
+  printf("round_by=%d\n", (int)(round_by));
+  printf("bytes_per_array=%d\n", (int)(bytes_per_array));
+  printf("items_per_array=%d\n", (int)(items_per_array));
+
+  //
+  // pin core affinity for initialization
+  //
+  if (pin_cpu(pid, cpu) == -1) {
+    err(1, "failed to set affinity");
+  } else {
+    fprintf(stderr, "process pinned to core %5d for %s init\n", cpu, test_name);
+  }
 
   double *a = NULL;
   double *b = NULL;
   double *c = NULL;
   {
-    size_t buf_size = is_mem_bw
-      ? sizeof(double) * len
-      : ((len + sizeof (double)) * (len + sizeof(double)) * sizeof(double));
-    char *buf1 = (char *)mmap(NULL, buf_size, PROT_READ | PROT_WRITE,
+    char *buf1 = (char *)mmap(NULL, bytes_per_array, PROT_READ | PROT_WRITE,
                         MAP_PRIVATE | MAP_ANON, fd, offset);
-    char *buf2 = (char *)mmap(NULL, buf_size, PROT_READ | PROT_WRITE,
+    char *buf2 = (char *)mmap(NULL, bytes_per_array, PROT_READ | PROT_WRITE,
                         MAP_PRIVATE | MAP_ANON, fd, offset);
-    char *buf3 = (char *)mmap(NULL, buf_size, PROT_READ | PROT_WRITE,
+    char *buf3 = (char *)mmap(NULL, bytes_per_array, PROT_READ | PROT_WRITE,
                         MAP_PRIVATE | MAP_ANON, fd, offset);
     a = (double *)buf1;
     b = (double *)buf2;
     c = (double *)buf3;
     if (is_mem_bw) {
-      for (int i = 0; i < len; i++) {
+      for (int i = 0; i < items_per_array; i++) {
         a[i] = 00.0;
         b[i] = 10.0;
         c[i] = 10.0;
       }
     } else {
-       for(i=0; i<len; i++) {
-          for(k=0; k<len; k++) {
-            a[i*len+k] = 0.0;
-            b[i*len+k] = 1.1;
-            c[i*len+k] = 1.1;
+       for(i=0; i<items_per_array; i++) {
+          for(k=0; k<items_per_array; k++) {
+            a[i*items_per_array+k] = 0.0;
+            b[i*items_per_array+k] = 1.1;
+            c[i*items_per_array+k] = 1.1;
           }
         }
     }
@@ -347,7 +365,7 @@ int main(int argc, char **argv) {
   //
   // run the test
   //
-  fprintf(stdout, "calling %s %5d times with len = %10zd\n", test_name, iter, len);
+  fprintf(stdout, "calling %s %5d times with items_per_array = %10zd\n", test_name, iter, items_per_array);
   struct timeval start_time;
   ret_int = gettimeofday(&start_time, NULL);
 
@@ -359,14 +377,14 @@ int main(int argc, char **argv) {
   for (i = 0; i < iter; i++) {
     size_t start = rdtsc();
     size_t bytes_per = triad_test_function 
-      ? (triad_test_function)(len, xx, a, b, c)
-      : (matrix_mult_test_function)(len, a, b, c);
+      ? (triad_test_function)(items_per_array, xx, a, b, c)
+      : (matrix_mult_test_function)(items_per_array, a, b, c);
     size_t stop = rdtsc();
     xx += 0.01;
     //
     double run_time = (double)(stop - start) * freq_scale;
-    total_bytes += len * bytes_per;
-    double bw = (double)(len * bytes_per) / run_time;
+    total_bytes += items_per_array * bytes_per;
+    double bw = (double)(items_per_array * bytes_per) / run_time;
     if (false) {
       fprintf(stdout, "i=%8d bw=%8.3f bytes/cycle\n", i, bw);
     }
