@@ -275,6 +275,16 @@ int main(int argc, char **argv) {
     is_mem_bw = (triad_test_function != NULL);
   }
 
+  FILE *output_file = NULL;
+  if (output_file_name[0] != '-') {
+    output_file = fopen(output_file_name, "w");
+  } else {
+    output_file = stdout;
+  }
+  if (output_file == NULL) {
+    fprintf(stderr, "%s: file open problems\n", output_file_name);
+  }
+
   //
   // set buffer sizes and loop tripcounts based on memory level
   //
@@ -307,12 +317,13 @@ int main(int argc, char **argv) {
 
   size_t items_per_array = bytes_per_array / sizeof(double);
 
-  printf("cache_size=%d\n", (int)(cache_size));
-  printf("nvects_used=%d\n", (int)(nvects_used));
-  printf("mult=%g\n", mult);
-  printf("round_by=%d\n", (int)(round_by));
-  printf("bytes_per_array=%d\n", (int)(bytes_per_array));
-  printf("items_per_array=%d\n", (int)(items_per_array));
+  fprintf(output_file, "mem_level=%d\n", (int)(mem_level));
+  fprintf(output_file, "cache_size=%d\n", (int)(cache_size));
+  fprintf(output_file, "nvects_used=%d\n", (int)(nvects_used));
+  fprintf(output_file, "mult=%g\n", mult);
+  fprintf(output_file, "round_by=%d\n", (int)(round_by));
+  fprintf(output_file, "bytes_per_array=%d\n", (int)(bytes_per_array));
+  fprintf(output_file, "items_per_array=%d\n", (int)(items_per_array));
 
   //
   // pin core affinity for initialization
@@ -320,7 +331,7 @@ int main(int argc, char **argv) {
   if (pin_cpu(pid, cpu) == -1) {
     err(1, "failed to set affinity");
   } else {
-    fprintf(stderr, "process pinned to core %5d for %s init\n", cpu, test_name);
+    fprintf(output_file, "process pinned to core %5d for %s init\n", cpu, test_name);
   }
 
   double *a = NULL;
@@ -359,13 +370,14 @@ int main(int argc, char **argv) {
   if (pin_cpu(pid, cpu_run) == -1) {
     err(1, "failed to set affinity");
   } else {
-    fprintf(stderr, "process pinned to core %5d for %s run\n", cpu_run, test_name);
+    fprintf(output_file, "process pinned to core %5d for %s run\n", cpu_run, test_name);
   }
 
   //
   // run the test
   //
-  fprintf(stdout, "calling %s %5d times with items_per_array = %10zd\n", test_name, iter, items_per_array);
+  fprintf(output_file, "calling %s %5d times with items_per_array = %10zd\n",
+      test_name, iter, items_per_array);
   struct timeval start_time;
   ret_int = gettimeofday(&start_time, NULL);
 
@@ -403,16 +415,6 @@ int main(int argc, char **argv) {
 
   double call_run_time = (double)(call_stop - call_start) * freq_scale;
   double avg_bw = (double)(total_bytes) / (double)call_run_time;
-
-  FILE *output_file = NULL;
-  if (output_file_name[0] != '-') {
-    output_file = fopen(output_file_name, "w");
-  } else {
-    output_file = stdout;
-  }
-  if (output_file == NULL) {
-    fprintf(stderr, "%s: file open problems\n", output_file_name);
-  }
 
   fprintf(output_file,
     "transfering %10zd bytes from memory level %d took a total of %10g cycles\n",
